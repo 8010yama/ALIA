@@ -1,0 +1,31 @@
+# push・Pull Request のたびにテストを走らせる。
+# テストは外部の API・Ollama・VOICEVOX をすべて偽物に差し替えているので、.env なしで動く。
+name: test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: テスト（Python ${{ matrix.python-version }}）
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: パッケージを入れる
+        run: pip install -r requirements-dev.txt
+      - name: コードの書き間違いを調べる（使っていない import、未定義の名前など）
+        run: python -m pyflakes alia scripts tests
+      - name: テスト
+        run: python -m pytest -v

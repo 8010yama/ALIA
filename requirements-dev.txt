@@ -1,3 +1,4 @@
 # テスト用（音声入力のパッケージは要らない）
 -r requirements.txt
 pytest
+pyflakes
