@@ -1,8 +1,15 @@
+"""
+ALIA - 電車情報モジュール
+Yahoo!路線情報 (transit.yahoo.co.jp) の検索結果ページをスクレイピングして取得。
+※ 公式APIではないため、Yahoo側のHTML構造変更で壊れる可能性がある点に注意。
+"""
+
 import re
 import datetime
 import requests
 from bs4 import BeautifulSoup, Comment
 
+# 住所（区）→ 最寄り駅の簡易マッピング。後で現在地連携時に精度を上げる想定。
 ADDRESS_TO_STATION = {
     "新宿区": "新宿",
     "渋谷区": "渋谷",
@@ -12,6 +19,7 @@ ADDRESS_TO_STATION = {
     "台東区": "上野",
 }
 
+# 「次の電車」問い合わせ時に、隣駅への経路を代わりに検索するためのフォールバック
 NEIGHBOR_STATION = {
     "新宿": "渋谷",
     "渋谷": "品川",
@@ -21,13 +29,16 @@ NEIGHBOR_STATION = {
     "池袋": "新宿",
 }
 
-def get_nearest_station(address: str) -> str:
+
+def get_nearest_station(address: str) -> str | None:
     for keyword, station in ADDRESS_TO_STATION.items():
         if keyword in address:
             return station
     return None
 
+
 def extract_destination(text: str) -> str | None:
+    """発話テキストから目的地の駅名を抽出する"""
     cleaned = re.sub(r"\d{1,2}時\d{0,2}分?(?:まで|までに|に)?", "", text)
     cleaned = re.sub(r"\d{1,2}:\d{2}(?:まで|までに|に)?", "", cleaned)
 
@@ -56,7 +67,9 @@ def extract_destination(text: str) -> str | None:
 
     return None
 
+
 def extract_arrive_time(text: str) -> str | None:
+    """発話テキストから到着希望時刻を抽出する"""
     match = re.search(r"(\d{1,2})[時:](\d{2})(?:分)?.*?(?:着|に着|までに|まで)", text)
     if match:
         return f"{int(match.group(1)):02d}:{match.group(2)}"
@@ -67,7 +80,9 @@ def extract_arrive_time(text: str) -> str | None:
 
     return None
 
+
 def get_next_trains(station: str) -> str:
+    """指定駅から隣駅への次の電車情報を取得"""
     now = datetime.datetime.now()
     neighbor = NEIGHBOR_STATION.get(station, "東京")
 
@@ -128,7 +143,9 @@ def get_next_trains(station: str) -> str:
     except Exception as e:
         return f"時刻表取得エラー: {e}"
 
+
 def get_train_route(from_station: str, to_station: str, arrive_time: str = None) -> str:
+    """出発駅→到着駅の経路検索"""
     now = datetime.datetime.now()
 
     if arrive_time:
@@ -224,37 +241,3 @@ def get_train_route(from_station: str, to_station: str, arrive_time: str = None)
         )
     except Exception as e:
         return f"経路検索エラー: {e}"
-
-def build_train_reply(train_context: str) -> str | None:
-    if "【電車】" not in train_context and "【次の電車】" not in train_context:
-        return None
-
-    lines = train_context.strip().split("\n")
-    depart_info = ""
-    transfer_stations = []
-
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("参考情報"):
-            continue
-
-        if line.startswith("あと") or line.startswith("まもなく"):
-            depart_info = f"{line}。"
-
-        elif line.startswith("【次の電車】"):
-            match = re.search(r"【次の電車】(.+?)駅", line)
-            if match:
-                depart_info = f"{match.group(1)}駅の次の電車です。"
-
-        else:
-            m = re.search(r"\d{2}:\d{2}着\d{2}:\d{2}発(\S+?) →", line)
-            if m:
-                station = re.sub(r"[\(（].*", "", m.group(1)).strip()
-                if station:
-                    transfer_stations.append(station)
-
-    reply = depart_info
-    if transfer_stations:
-        reply += f"乗換は{'、'.join(transfer_stations)}です。"
-
-    return reply if reply else None

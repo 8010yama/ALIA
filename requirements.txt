@@ -1,11 +1,9 @@
-fastapi
-uvicorn
-pydantic
+httpx
 python-dotenv
-pyngrok
-geopy
 requests
 beautifulsoup4
-sounddevice
-numpy
-faster-whisper
+geopy
+google-auth-oauthlib
+fastapi
+uvicorn[standard]
+ngrok
