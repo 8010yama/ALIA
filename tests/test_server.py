@@ -72,6 +72,35 @@ def test_voice_returns_wav(client, llm, path):
     assert "x-maps-url" not in res.headers
 
 
+@pytest.mark.parametrize("path", ["/alia", "/chat_text"])
+def test_json_without_content_type_is_accepted(client, llm, path):
+    """iPhone のショートカットが Content-Type を付けずに JSON を送ってきても読める（実際に起きた 422 エラー）"""
+    calls = llm()
+    body = '{"lon":139.7199371255114,"text":"ハロー","lat":35.74516051569766}'.encode()
+    res = client.post(path, content=body, headers={**KEY, "content-type": "text/plain"})
+    assert res.status_code == 200
+    assert calls == [("ハロー", {"lat": 35.74516051569766, "lon": 139.7199371255114})]
+
+
+def test_lat_lon_as_strings_are_accepted(client, llm):
+    calls = llm()
+    res = client.post("/chat_text", json={"text": "やあ", "lat": "35.7", "lon": "139.7"}, headers=KEY)
+    assert res.status_code == 200
+    assert calls[0][1] == {"lat": 35.7, "lon": 139.7}
+
+
+@pytest.mark.parametrize("body,status", [
+    ("not json", 400),
+    ("[1, 2]", 400),
+    ('{"lat": 35.7}', 422),         # text がない
+    ('{"text": "x", "lat": "北"}', 422),
+])
+def test_chat_bad_bodies(client, llm, body, status):
+    llm()
+    res = client.post("/alia", content=body.encode(), headers={**KEY, "content-type": "application/json"})
+    assert res.status_code == status
+
+
 def test_voice_returns_map_url_header(client, llm):
     url = "http://maps.apple.com/?saddr=a&daddr=b&dirflg=d"
     llm(reply="地図を用意しました。", map_url=url)

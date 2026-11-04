@@ -27,7 +27,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from alia import config
 from alia.core import ask_once, new_conversation, process_message
@@ -71,6 +71,31 @@ def _verify_api_key(x_api_key: str) -> None:
         raise HTTPException(status_code=401, detail="認証エラー")
 
 
+async def _read_json(request: Request) -> dict:
+    """
+    本文を JSON として読む。iPhone のショートカットは Content-Type を付けずに送ってくることがあり、
+    FastAPI の標準の読み方だと 422 エラーになるので、ヘッダーに関係なく自分で読む。
+    """
+    raw_body = await request.body()
+    try:
+        data = json.loads(raw_body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"[{request.url.path}] JSON として読めませんでした: {e} / body={raw_body!r}")
+        raise HTTPException(status_code=400, detail="リクエストボディをJSONとして解釈できませんでした")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="リクエストボディはJSONのオブジェクトにしてください")
+    return data
+
+
+async def _read_payload(request: Request) -> TextPayload:
+    data = await _read_json(request)
+    try:
+        return TextPayload.model_validate(data)
+    except ValidationError as e:
+        print(f"[{request.url.path}] 中身が足りないか、形が違います: {data} / {e.errors()}")
+        raise HTTPException(status_code=422, detail="text（と、あれば lat・lon）を送ってください")
+
+
 def _reply(payload: TextPayload) -> tuple[str, dict]:
     """発話を LLM に渡して返事を作る。戻り値: (返事, context)。context には地図の URL などが入る"""
     print(f"[受信] {payload.text} (lat={payload.lat}, lon={payload.lon})")
@@ -89,9 +114,7 @@ def _reply(payload: TextPayload) -> tuple[str, dict]:
     return reply, context
 
 
-@app.post("/chat_text")
-def chat_text(payload: TextPayload, x_api_key: str = Header(...)):
-    _verify_api_key(x_api_key)
+def _text_response(payload: TextPayload) -> dict:
     reply, context = _reply(payload)
     result = {"text": reply}
     if "map_url" in context:
@@ -99,9 +122,7 @@ def chat_text(payload: TextPayload, x_api_key: str = Header(...)):
     return result
 
 
-@app.post("/chat_voice")
-def chat_voice(payload: TextPayload, x_api_key: str = Header(...)):
-    _verify_api_key(x_api_key)
+def _voice_response(payload: TextPayload) -> Response:
     reply, context = _reply(payload)
 
     try:
@@ -118,9 +139,22 @@ def chat_voice(payload: TextPayload, x_api_key: str = Header(...)):
     return Response(content=audio, media_type="audio/wav", headers=headers)
 
 
+# LLM と音声合成は時間がかかるので、サーバーが止まらないよう別のスレッドで動かす
+@app.post("/chat_text")
+async def chat_text(request: Request, x_api_key: str = Header(...)):
+    _verify_api_key(x_api_key)
+    return await run_in_threadpool(_text_response, await _read_payload(request))
+
+
+@app.post("/chat_voice")
+async def chat_voice(request: Request, x_api_key: str = Header(...)):
+    _verify_api_key(x_api_key)
+    return await run_in_threadpool(_voice_response, await _read_payload(request))
+
+
 @app.post("/alia")
-def alia(payload: TextPayload, x_api_key: str = Header(...)):
-    return chat_voice(payload, x_api_key)
+async def alia(request: Request, x_api_key: str = Header(...)):
+    return await chat_voice(request, x_api_key)
 
 
 def _destination_weather_comment(destination: str, weather_text: str) -> str:
@@ -162,16 +196,9 @@ def _navigate(text: str, lat: float, lon: float) -> dict:
 async def navigate(request: Request, x_api_key: str = Header(...)):
     """
     現在地と発話の全文から、目的地までの地図の URL と、目的地の天気の一言を返す。
-    ショートカットの送り方によっては Content-Type が JSON にならないので、本文を自分で読む。
     """
     _verify_api_key(x_api_key)
-
-    raw_body = await request.body()
-    try:
-        data = json.loads(raw_body.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"[navigate] JSON として読めませんでした: {e} / body={raw_body!r}")
-        raise HTTPException(status_code=400, detail="リクエストボディをJSONとして解釈できませんでした")
+    data = await _read_json(request)
 
     text, lat, lon = data.get("text"), data.get("lat"), data.get("lon")
     if not text or lat is None or lon is None:
