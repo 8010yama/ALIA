@@ -185,6 +185,22 @@ def health():
     return {"status": "ok"}
 
 
+def startup_message(public_url: str, fixed_domain: str = "") -> str:
+    """起動したときに出す案内（iPhone のショートカットに入れる URL と、URL を固定する方法）"""
+    lines = [
+        f"外部URL: {public_url}",
+        f"iPhone のショートカットに入れる URL: {public_url}/alia",
+    ]
+    if not fixed_domain:
+        domain = public_url.split("://", 1)[-1].rstrip("/")
+        lines += [
+            "",
+            "[ヒント] この URL を固定すると、ショートカットを書き換えずに済みます。.env に次の1行を足してください:",
+            f"    NGROK_DOMAIN={domain}",
+        ]
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="ALIA のサーバー（iPhone から使う）")
     parser.add_argument("--no-ngrok", action="store_true", help="ngrok を使わない（同じ Wi-Fi の中や PC で試すとき）")
@@ -201,7 +217,7 @@ def main():
         if config.NGROK_DOMAIN:
             options["domain"] = config.NGROK_DOMAIN
         listener = ngrok.forward(args.port, **options)
-        print(f"外部URL: {listener.url()}")
+        print(startup_message(listener.url(), config.NGROK_DOMAIN))
 
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 

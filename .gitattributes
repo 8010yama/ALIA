@@ -1,0 +1,2 @@
+# Windows の PowerShell 用のスクリプトは CRLF のまま（BOM 付き UTF-8）
+*.ps1 text eol=crlf

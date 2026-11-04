@@ -150,3 +150,15 @@ def test_navigate_when_llm_is_down(client, nav, monkeypatch):
 def test_navigate_bad_requests(client, nav, body, status):
     res = client.post("/navigate", content=body.encode(), headers={**KEY, "content-type": "application/json"})
     assert res.status_code == status
+
+
+def test_startup_message_suggests_fixing_the_url():
+    text = server.startup_message("https://abc-123.ngrok-free.app")
+    assert "https://abc-123.ngrok-free.app/alia" in text
+    assert "NGROK_DOMAIN=abc-123.ngrok-free.app" in text
+
+
+def test_startup_message_with_fixed_domain():
+    text = server.startup_message("https://alia.ngrok-free.app", "alia.ngrok-free.app")
+    assert "https://alia.ngrok-free.app/alia" in text
+    assert "NGROK_DOMAIN" not in text
