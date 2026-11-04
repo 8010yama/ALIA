@@ -6,10 +6,15 @@ ALIA - 設定
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+# 起動したフォルダの .env → プロジェクトのフォルダの .env の順に読む（先に読んだほうが優先）
+load_dotenv(Path.cwd() / ".env")
+load_dotenv(PROJECT_DIR / ".env")
 
 
 def _get(name: str, default: str = "") -> str:
