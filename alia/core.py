@@ -1,29 +1,24 @@
 """
-ALIA - 共通コアロジック
-ツール定義・ディスパッチ・Ollamaとの会話処理をまとめたモジュール。
-CLI(main.py)とFastAPIサーバー(server.py)の両方から呼び出される。
+ALIA - 中心の処理
+
+LLM（Ollama）に会話とツールの一覧を渡し、LLM が選んだツールを実行して、その結果をもとに
+最後の返事を作らせる。PC のコマンド版（cli.py）とスマホ用のサーバー（server.py）の両方から使う。
+
+    ユーザーの発話 → LLM「天気のツールを、place=大阪 で呼びたい」
+                  → dispatch_tool_call で実行 → 結果を LLM に返す → LLM が話し言葉で返事
 """
 
-import os
-import json
 import datetime
+import json
+
 import httpx
-from dotenv import load_dotenv
 
-from weather_utils import get_weather_info
-from train_utils import get_next_trains, get_train_route
-from notion_utils import write_to_notion
-from map_utils import open_map, get_map_url, find_nearest_station
-from calendar_utils import add_calendar_event, list_calendar_events, update_calendar_event
-
-load_dotenv()
-
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL_NAME = "gemma4:12b"
-
-HOME_LAT = float(os.getenv("HOME_LAT", "35.6895"))
-HOME_LON = float(os.getenv("HOME_LON", "139.6917"))
-HOME_STATION = os.getenv("HOME_STATION", "新宿")
+from alia import config
+from alia.tools.calendar import add_calendar_event, list_calendar_events, update_calendar_event
+from alia.tools.maps import find_nearest_station, geocode_place, get_map_url
+from alia.tools.notion import write_to_notion
+from alia.tools.train import get_next_trains, get_train_route
+from alia.tools.weather import get_weather_info
 
 _WEEKDAYS_JA = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -35,8 +30,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "現在地（デフォルトの自宅地点）の本日の気温予報と降水情報を取得する。天気・雨・気温・傘について聞かれたら使う。",
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "description": "本日の気温予報と雨の情報を取得する。天気・雨・気温・傘について聞かれたら使う。場所の指定がなければ現在地（なければ自宅）の天気になる。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "place": {"type": "string", "description": "「大阪」「箱根」のように場所を指定されたときの地名。指定がなければ空文字でよい。"}
+                },
+                "required": [],
+            },
         },
     },
     {
@@ -161,27 +162,30 @@ TOOLS = [
 
 # ============ ツール実行のディスパッチ ============
 
-def _resolve_default_station(context: dict) -> str:
+def _resolve_default_station(context: dict | None) -> str:
     """
-    駅名の指定がないとき、context(現在地lat/lon)があれば最寄り駅を検索し、
-    無ければ.envのHOME_STATIONにフォールバックする。同一リクエスト内では結果をキャッシュする。
+    駅名の指定がないときの出発駅。スマホの現在地（context の lat/lon）があればその最寄り駅、
+    なければ .env の HOME_STATION。同じリクエストの中では検索結果を使い回す。
     """
     if not context:
-        return HOME_STATION
+        return config.HOME_STATION
 
-    if "_nearest_station" in context:
-        return context["_nearest_station"] or HOME_STATION
+    if "_nearest_station" not in context:
+        lat, lon = context.get("lat"), context.get("lon")
+        context["_nearest_station"] = find_nearest_station(lat, lon) if lat is not None and lon is not None else None
 
-    lat = context.get("lat")
-    lon = context.get("lon")
-    if lat is not None and lon is not None:
-        station = find_nearest_station(lat, lon)
-        context["_nearest_station"] = station
-        if station:
-            return station
+    return context["_nearest_station"] or config.HOME_STATION
 
-    context["_nearest_station"] = None
-    return HOME_STATION
+
+def _weather_location(place: str, context: dict | None) -> tuple[float, float, str]:
+    """天気を調べる場所：指定された地名 → スマホの現在地 → 自宅 の順に決める"""
+    if place:
+        lat, lon = geocode_place(place)
+        if lat is not None:
+            return lat, lon, place
+    if context and context.get("lat") is not None and context.get("lon") is not None:
+        return context["lat"], context["lon"], "現在地"
+    return config.HOME_LAT, config.HOME_LON, "自宅"
 
 
 def dispatch_tool_call(name: str, arguments: dict, context: dict = None) -> str:
@@ -191,7 +195,10 @@ def dispatch_tool_call(name: str, arguments: dict, context: dict = None) -> str:
     """
     try:
         if name == "get_weather":
-            return get_weather_info(HOME_LAT, HOME_LON)
+            place = (arguments.get("place") or "").strip()
+            lat, lon, label = _weather_location(place, context)
+            note = f"（「{place}」が見つからなかったので{label}の天気）" if place and label != place else ""
+            return f"{label}の天気{note}\n{get_weather_info(lat, lon)}"
 
         elif name == "get_next_train":
             station = arguments.get("station") or _resolve_default_station(context)
@@ -276,7 +283,6 @@ def _build_system_prompt() -> dict:
             "特に車や地図を明示的に求めていない限り、get_train_routeまたはget_next_trainツールを使ってください。"
             "open_mapツールは、「ナビして」「地図で見せて」「車で行きたい」「運転で」のように、"
             "ユーザーが明示的に地図表示や車でのルートを求めたときだけ呼び出してください。"
-            "「地図を開いて」「ナビして」「行き方教えて」と言われたらopen_mapツールを呼び出してください。"
             "open_mapツールを呼んだ後は「地図を用意しました」のように答え、"
             "「開きました」のように既に画面が開いたと断定する言い方はしないでください。"
             "「予定を追加して」「カレンダーに入れて」と言われたらadd_calendar_eventツールを、"
@@ -298,12 +304,38 @@ def new_conversation() -> list:
     return [_build_system_prompt()]
 
 
+def _refresh_system_prompt(history: list) -> None:
+    """
+    システムプロンプトの日時を今に更新する。
+    サーバーは何日も動き続けるので、起動した日の日付のままだと「明日」の解釈がずれる。
+    """
+    if history and history[0].get("role") == "system":
+        history[0] = _build_system_prompt()
+    else:
+        history.insert(0, _build_system_prompt())
+
+
+def _trim_history(history: list, max_messages: int | None = None) -> None:
+    """
+    会話履歴が長くなりすぎないよう、古いものから捨てる（システムプロンプトは残す）。
+    ツールの呼び出しとその結果が途中で切れないよう、残す履歴は必ずユーザーの発言から始める。
+    """
+    max_messages = config.MAX_HISTORY_MESSAGES if max_messages is None else max_messages
+    body = history[1:]
+    if len(body) <= max_messages:
+        return
+    body = body[-max_messages:]
+    while body and body[0].get("role") != "user":
+        body.pop(0)
+    history[1:] = body
+
+
 # ============ Ollama呼び出し ============
 
 def _call_ollama_once(messages: list, use_tools: bool) -> dict:
     """非ストリーミングで1回分のOllamaレスポンスを取得する"""
     payload = {
-        "model": MODEL_NAME,
+        "model": config.OLLAMA_MODEL,
         "messages": messages,
         "stream": False,
         "think": False,
@@ -311,7 +343,7 @@ def _call_ollama_once(messages: list, use_tools: bool) -> dict:
     if use_tools:
         payload["tools"] = TOOLS
 
-    res = httpx.post(OLLAMA_URL, json=payload, timeout=30)
+    res = httpx.post(config.OLLAMA_URL, json=payload, timeout=60)
     res.raise_for_status()
     return res.json()
 
@@ -323,14 +355,15 @@ def _stream_ollama(messages: list, on_token=None) -> str:
     戻り値: 全文
     """
     payload = {
-        "model": MODEL_NAME,
+        "model": config.OLLAMA_MODEL,
         "messages": messages,
         "stream": True,
         "think": False,
     }
 
     full_response = ""
-    with httpx.stream("POST", OLLAMA_URL, json=payload, timeout=None) as response:
+    with httpx.stream("POST", config.OLLAMA_URL, json=payload, timeout=120) as response:
+        response.raise_for_status()
         for line in response.iter_lines():
             if not line:
                 continue
@@ -346,6 +379,12 @@ def _stream_ollama(messages: list, on_token=None) -> str:
     return full_response
 
 
+def ask_once(prompt: str) -> str:
+    """会話履歴もツールも使わずに、1回だけ LLM に聞く（ナビのときの一言づくりなど）"""
+    result = _call_ollama_once([{"role": "user", "content": prompt}], use_tools=False)
+    return result.get("message", {}).get("content", "").strip()
+
+
 # ============ メイン処理 ============
 
 def process_message(history: list, user_message: str, on_tool_event=None, on_token=None, context: dict = None) -> str:
@@ -357,7 +396,9 @@ def process_message(history: list, user_message: str, on_tool_event=None, on_tok
     on_token(token: str): 最終回答のストリーミング中、トークンごとに呼ばれるコールバック(CLI表示用)
     context: dict を渡すと、ツール実行時の副次情報(例: map_url)がin-placeで書き込まれる
     """
+    _refresh_system_prompt(history)
     history.append({"role": "user", "content": user_message})
+    _trim_history(history)
 
     # ① まずツールが必要か判断させる
     first_result = _call_ollama_once(history, use_tools=True)
@@ -378,13 +419,15 @@ def process_message(history: list, user_message: str, on_tool_event=None, on_tok
                     args = {}
             else:
                 args = raw_args
+            if not isinstance(args, dict):
+                args = {}
 
             tool_result = dispatch_tool_call(func_name, args, context=context)
 
             if on_tool_event:
                 on_tool_event(func_name, args, tool_result)
 
-            history.append({"role": "tool", "content": tool_result})
+            history.append({"role": "tool", "tool_name": func_name, "content": tool_result})
 
         # ② ツール結果を踏まえた最終回答をストリーミングで生成
         final_text = _stream_ollama(history, on_token=on_token)

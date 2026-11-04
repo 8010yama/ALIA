@@ -1,0 +1,5 @@
+# PC のマイクで話しかけるとき（python -m alia.cli --voice）だけ必要
+-r requirements.txt
+numpy
+sounddevice
+faster-whisper

@@ -1,6 +1,18 @@
+# 秘密情報
 .env
+credentials.json
+token.json
+
+# Python
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+
+# 動かしたときにできるファイル
+*.wav
+speakers*.json
+
 .claude/

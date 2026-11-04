@@ -1,16 +1,14 @@
 """
-ALIA - 天気情報モジュール
+ALIA - 天気
 気温: Open-Meteo (無料・APIキー不要)
 直近の降水: Yahoo! YOLP気象情報API (要APIキー)
 """
 
-import os
 import datetime
-import requests
-from dotenv import load_dotenv
 
-load_dotenv()
-YAHOO_APP_ID = os.getenv("YAHOO_APP_ID")
+import requests
+
+from alia import config
 
 
 def _get_daily_forecast(lat: float, lon: float):
@@ -44,12 +42,12 @@ def _get_daily_forecast(lat: float, lon: float):
 
 def _get_current_rainfall(lat: float, lon: float) -> float:
     """Yahoo YOLPから現在の降水強度(mm/h)を取得"""
-    if not YAHOO_APP_ID:
+    if not config.YAHOO_APP_ID:
         raise RuntimeError("YAHOO_APP_ID が.envに設定されていません")
 
     url = (
         f"https://map.yahooapis.jp/weather/V1/place"
-        f"?coordinates={lon},{lat}&output=json&appid={YAHOO_APP_ID}"
+        f"?coordinates={lon},{lat}&output=json&appid={config.YAHOO_APP_ID}"
     )
     # デフォルトのUser-Agent(python-requests/x.x)だとYahoo側で弾かれることがあるため、
     # ブラウザ相当のヘッダーを明示的に付与する。

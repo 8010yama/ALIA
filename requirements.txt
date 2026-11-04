@@ -1,9 +1,11 @@
+# ALIA を動かすのに必要なもの
 httpx
-python-dotenv
 requests
+python-dotenv
 beautifulsoup4
 geopy
-google-auth-oauthlib
 fastapi
 uvicorn[standard]
 ngrok
+# Google カレンダーの初回設定（scripts/get_refresh_token.py）で使う
+google-auth-oauthlib

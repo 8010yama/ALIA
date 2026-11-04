@@ -2,16 +2,17 @@
 ALIA - Googleカレンダー用リフレッシュトークン取得スクリプト（初回のみ実行）
 
 事前準備: Google Cloud ConsoleでOAuthクライアントID(デスクトップアプリ)を発行し、
-credentials.json をこのファイルと同じフォルダに置いておくこと。
+credentials.json をプロジェクトのフォルダ（このスクリプトの1つ上）に置いておくこと。
+credentials.json は .gitignore で Git に入らないようにしてある。
 
-実行方法:
-    python get_refresh_token.py
+実行方法（プロジェクトのフォルダで）:
+    python scripts/get_refresh_token.py
 
 実行するとブラウザが開き、Googleログイン・権限許可を求められる。
 許可すると、ターミナルに CLIENT_ID / CLIENT_SECRET / REFRESH_TOKEN が表示されるので、
 それらを .env にコピーしてください。
 
-このスクリプトはセットアップ時にのみ使用する。calendar_utils.py の実行には不要。
+このスクリプトはセットアップのときだけ使う。ALIA を動かすときには要らない。
 """
 
 import json
@@ -32,7 +33,7 @@ def main():
     print(f"GOOGLE_CLIENT_ID={client_info['client_id']}")
     print(f"GOOGLE_CLIENT_SECRET={client_info['client_secret']}")
     print(f"GOOGLE_REFRESH_TOKEN={creds.refresh_token}")
-    print(f"GOOGLE_CALENDAR_ID=primary")
+    print("GOOGLE_CALENDAR_ID=primary")
     print("\n==========================================\n")
 
 
