@@ -160,6 +160,16 @@ def test_navigate_accepts_text_plain_body(client, nav):
     assert "daddr=%E9%8E%8C%E5%80%89" in res.json()["url"]
 
 
+@pytest.mark.parametrize("text", ["ハロー", "明日の天気は？"])
+def test_navigate_without_destination_opens_no_map(client, nav, monkeypatch, text):
+    """ショートカットは毎回 /navigate も呼ぶ。行き先を言っていなければ地図を返さない（実際に起きた問題）"""
+    monkeypatch.setattr(server, "geocode_place", lambda place: pytest.fail("調べなくてよい"))
+    res = client.post("/navigate", json={"text": text, "lat": 35.7, "lon": 139.7}, headers=KEY)
+    assert res.status_code == 200
+    assert res.json() == {"url": None, "google_url": None, "text": None}
+    assert nav == []  # LLM にも聞かない
+
+
 def test_navigate_when_llm_is_down(client, nav, monkeypatch):
     def broken(prompt):
         raise ConnectionError("down")
@@ -174,7 +184,6 @@ def test_navigate_when_llm_is_down(client, nav, monkeypatch):
     ("not json", 400),
     ('{"text": "横浜まで行きたい"}', 400),         # 位置がない
     ('{"text": "", "lat": 1, "lon": 2}', 400),     # 発話がない
-    ('{"text": "どこか", "lat": 1, "lon": 2}', 400),  # 目的地がない
 ])
 def test_navigate_bad_requests(client, nav, body, status):
     res = client.post("/navigate", content=body.encode(), headers={**KEY, "content-type": "application/json"})

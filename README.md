@@ -143,7 +143,7 @@ URL の内容を取得の設定：
 | 本文（JSON） | `text`：2 の結果、`lat`・`lon`：1 の緯度・経度 |
 
 
-**ナビ専用のショートカット**：`/navigate` に同じ形で送ると、LLM の会話を通さずにすぐ、地図の URL（`url`、Android 用は `google_url`）と目的地の天気の一言（`text`）が返ってきます。
+**地図も開きたいとき**：同じ発話を `/navigate` にも送ると、「〇〇まで行きたい」「〇〇までナビして」のように行き先を言ったときだけ、LLM を通さずにすぐ、地図の URL（`url`、Android 用は `google_url`）と目的地の天気の一言（`text`）が返ってきます。行き先を言っていなければ `url` は `null` なので、ショートカットで「辞書の値を取得（`url`）」→「もし〈辞書の値〉が任意の値を持つ」→「URL を開く」とすれば、行き先を言ったときだけ地図が開きます。
 
 ### スマホから簡単に使うための設定
 
@@ -161,7 +161,7 @@ ngrok を使わずに、[Tailscale](https://tailscale.com)（無料）で iPhone
 |---|---|---|
 | `POST /alia`、`POST /chat_voice` | `{"text", "lat"?, "lon"?}` | 返事の wav。地図を開くときはヘッダー `X-Maps-Url` |
 | `POST /chat_text` | `{"text", "lat"?, "lon"?}` | `{"text": 返事}`（音声なし。動作確認用） |
-| `POST /navigate` | `{"text", "lat", "lon"}` | `{"url", "google_url", "text"}` |
+| `POST /navigate` | `{"text", "lat", "lon"}` | `{"url", "google_url", "text"}`（行き先を言っていなければ、どれも `null`） |
 | `GET /health` | | `{"status": "ok"}` |
 
 `/health` 以外は、ヘッダー `x-api-key` が `.env` の `API_KEY` と一致しないと 401 を返します。

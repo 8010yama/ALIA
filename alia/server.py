@@ -15,6 +15,7 @@ VOICEVOX で音声にした wav を返す。ngrok で外から届く URL を作�
     POST /alia        /chat_voice と同じ（前のショートカットの URL のまま使えるように）
     POST /chat_text   {"text", "lat"?, "lon"?} → {"text": 返事}（音声なし。動作確認用）
     POST /navigate    {"text", "lat", "lon"}   → {"url": Apple マップ, "google_url": Google マップ, "text": 目的地の天気の一言}
+                      行き先を言っていなければ、どれも null
     GET  /health      → {"status": "ok"}
 """
 
@@ -172,10 +173,15 @@ def _destination_weather_comment(destination: str, weather_text: str) -> str:
         return f"{destination}への経路を用意しました。{weather_text}"
 
 
+# 行き先を言っていないときの返事。ショートカットは「url に値があるときだけ開く」で分ける
+NO_NAVIGATION = {"url": None, "google_url": None, "text": None}
+
+
 def _navigate(text: str, lat: float, lon: float) -> dict:
     destination = extract_nav_destination(text)
     if not destination:
-        raise HTTPException(status_code=400, detail="目的地を認識できませんでした")
+        print(f"[navigate] 行き先なし（地図は開かない） <- {text}")
+        return NO_NAVIGATION
 
     url = get_map_url(destination, f"{lat},{lon}")
     print(f"[navigate] {destination} <- {text} url={url}")
@@ -197,6 +203,7 @@ def _navigate(text: str, lat: float, lon: float) -> dict:
 async def navigate(request: Request, x_api_key: str = Header(...)):
     """
     現在地と発話の全文から、目的地までの地図の URL と、目的地の天気の一言を返す。
+    行き先を言っていなければ、url などは null（地図を開かない）。
     """
     _verify_api_key(x_api_key)
     data = await _read_json(request)

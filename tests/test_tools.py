@@ -20,8 +20,12 @@ from tests.conftest import FakeResponse
     ("鎌倉までの道", "鎌倉"),
     ("江ノ島のナビ", "江ノ島"),
     ("渋谷まで案内して", "渋谷"),
-    ("東京スカイツリー", "東京スカイツリー"),  # 言い方がわからなければ全文を目的地に
-    ("どこか", None),
+    ("横浜まで連れてって", "横浜"),
+    # 行き先を言っていない発話は地図にしない（毎回 /navigate が呼ばれるので）
+    ("ハロー", None),
+    ("明日の天気は？", None),
+    ("東京スカイツリー", None),
+    ("どこかに行きたい", None),
     ("", None),
 ])
 def test_extract_nav_destination(text, expected):

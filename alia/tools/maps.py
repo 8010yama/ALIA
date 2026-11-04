@@ -18,8 +18,8 @@ import requests
 from alia import config
 
 _NAV_PATTERNS = [
-    r"(.{1,20}?)まで(?:案内|ナビ|行き方|道順|連れて行って)",
-    r"(.{1,20}?)(?:に|へ)(?:行きたい|向かいたい|連れて行って|案内して)",
+    r"(.{1,20}?)まで(?:案内|ナビ|行き方|道順|連れて行って|連れてって)",
+    r"(.{1,20}?)(?:に|へ)(?:行きたい|向かいたい|連れて行って|連れてって|案内して)",
     r"(.{1,20}?)(?:に|へ)(?:行く|向かう)",
     r"(.{1,20}?)への経路",
     r"(.{1,20}?)までの道",
@@ -31,8 +31,9 @@ _NOT_A_PLACE = {"そこ", "ここ", "あそこ", "どこか", "家", ""}
 
 def extract_nav_destination(text: str) -> str | None:
     """
-    発話の全文から目的地の名前だけを取り出す。
-    どの言い方にも当てはまらなければ、全文をそのまま目的地とみなす（「どこか」などは None）。
+    「〇〇まで行きたい」「〇〇までナビして」のような言い方から、目的地の名前だけを取り出す。
+    行き先を言っていない発話（「ハロー」「明日の天気は？」など）は None。
+    iPhone のショートカットは毎回 /navigate も呼ぶので、ここで行き先がないものを地図にしてはいけない。
     """
     # 「ここから」「今から」のような出発地の前置きは、目的地の読み取りの邪魔になるので先に消す
     text = re.sub(r"^(?:ここ|そこ|あそこ|今|現在地)から", "", text.strip())
@@ -42,8 +43,7 @@ def extract_nav_destination(text: str) -> str | None:
             dest = re.sub(r"^(?:の|に|へ|で|を|から|は|が)", "", m.group(1).strip())
             if dest not in _NOT_A_PLACE:
                 return dest
-    text = text.strip()
-    return text if text not in _NOT_A_PLACE else None
+    return None
 
 
 def get_map_url(destination: str, origin: str | None = None) -> str:
