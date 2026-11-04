@@ -17,7 +17,8 @@ from bs4 import BeautifulSoup, Comment
 SEARCH_URL = "https://transit.yahoo.co.jp/search/print"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# 「次の電車」は、隣の駅までの経路を検索して最初の電車を出す
+# 「次の電車」は、行き先までの経路を検索して最初の電車を出す。
+# 行き先がわからないとき（.env の COMMUTE_STATION もないとき）は、隣の駅で代用する
 NEIGHBOR_STATION = {
     "新宿": "渋谷",
     "渋谷": "品川",
@@ -120,15 +121,20 @@ def parse_route_summary(soup: BeautifulSoup) -> dict | None:
     }
 
 
-def get_next_trains(station: str, now: datetime.datetime | None = None) -> str:
-    """指定駅から隣の駅への、次の電車の情報"""
+def get_next_trains(station: str, to_station: str | None = None, now: datetime.datetime | None = None) -> str:
+    """
+    station から to_station 方面へ出る、次の電車の情報。
+    to_station がなければ、隣の駅（NEIGHBOR_STATION、なければ東京）方面で代用する。
+    """
     now = now or datetime.datetime.now()
-    neighbor = NEIGHBOR_STATION.get(station, "東京")
-    if neighbor == station:
-        neighbor = "新宿"
+    if to_station and to_station == station:
+        return f"{station}駅から{station}駅への電車は調べられません。行き先を変えてください。"
+    direction = to_station or NEIGHBOR_STATION.get(station, "東京")
+    if direction == station:
+        direction = "新宿"
 
     try:
-        route = parse_route_summary(_fetch(_search_params(station, neighbor, now, _DEPART)))
+        route = parse_route_summary(_fetch(_search_params(station, direction, now, _DEPART)))
     except Exception as e:
         return f"時刻表の取得でエラーが起きました: {type(e).__name__}: {e}"
 
@@ -137,7 +143,10 @@ def get_next_trains(station: str, now: datetime.datetime | None = None) -> str:
 
     wait = format_wait(minutes_until(route["depart"], now))
     line = route["lines"][0] if route["lines"] else ""
-    return f"【次の電車】{station}駅\n{wait}（{route['depart']}発）\n{line}".rstrip()
+    text = f"【次の電車】{station}駅（{direction}方面）\n{wait}（{route['depart']}発）\n{line}".rstrip()
+    if to_station and route["arrive"]:
+        text += f"\n{to_station}着 {route['arrive']}"
+    return text
 
 
 def get_train_route(from_station: str, to_station: str, arrive_time: str | None = None,

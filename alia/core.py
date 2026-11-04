@@ -22,6 +22,9 @@ from alia.tools.weather import get_weather_info
 
 _WEEKDAYS_JA = ["月", "火", "水", "木", "金", "土", "日"]
 
+# 1回の発話で、ツールを続けて呼べる回数の上限（LLM が同じツールを呼び続けて止まらないのを防ぐ）
+MAX_TOOL_ROUNDS = 4
+
 
 # ============ ツール定義（Ollamaのtools形式） ============
 
@@ -30,11 +33,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "本日の気温予報と雨の情報を取得する。天気・雨・気温・傘について聞かれたら使う。場所の指定がなければ現在地（なければ自宅）の天気になる。",
+            "description": "天気・最高/最低気温・降水確率・雨の時間帯を取得する（今日から6日先まで）。天気・雨・気温・傘について聞かれたら使う。場所の指定がなければ現在地（なければ自宅）の天気になる。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "place": {"type": "string", "description": "「大阪」「箱根」のように場所を指定されたときの地名。指定がなければ空文字でよい。"}
+                    "place": {"type": "string", "description": "「大阪」「箱根」のように場所を指定されたときの地名。指定がなければ空文字でよい。"},
+                    "date": {"type": "string", "description": "調べたい日付。'YYYY-MM-DD'形式。「明日」「土曜日」などは日付に直して渡す。今日なら空文字でよい。"},
                 },
                 "required": [],
             },
@@ -44,11 +48,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_next_train",
-            "description": "指定した駅の次の電車の発車時刻を取得する。駅名の指定がなければ自宅最寄り駅を使う。",
+            "description": "駅から出る次の電車の発車時刻と、あと何分かを取得する。駅名の指定がなければ現在地の最寄り駅（なければ自宅の最寄り駅）。行き先や方面の指定がなければ、いつもの行き先（通勤・通学先）方面。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "station": {"type": "string", "description": "調べたい駅名。指定がなければ空文字でよい。"}
+                    "station": {"type": "string", "description": "乗る駅の名前。指定がなければ空文字でよい。"},
+                    "to_station": {"type": "string", "description": "行き先・方面の駅名（「渋谷方面」なら渋谷）。指定がなければ空文字でよい。"},
                 },
                 "required": [],
             },
@@ -196,13 +201,21 @@ def dispatch_tool_call(name: str, arguments: dict, context: dict = None) -> str:
     try:
         if name == "get_weather":
             place = (arguments.get("place") or "").strip()
+            date_text = (arguments.get("date") or "").strip()
+            date = None
+            if date_text:
+                try:
+                    date = datetime.datetime.strptime(date_text, "%Y-%m-%d").date()
+                except ValueError:
+                    return f"日付の形式が正しくありません（YYYY-MM-DD で指定）: {date_text}"
             lat, lon, label = _weather_location(place, context)
             note = f"（「{place}」が見つからなかったので{label}の天気）" if place and label != place else ""
-            return f"{label}の天気{note}\n{get_weather_info(lat, lon)}"
+            return f"場所: {label}{note}\n{get_weather_info(lat, lon, date)}"
 
         elif name == "get_next_train":
             station = arguments.get("station") or _resolve_default_station(context)
-            return get_next_trains(station)
+            to_station = arguments.get("to_station") or config.COMMUTE_STATION or None
+            return get_next_trains(station, to_station)
 
         elif name == "add_memo":
             content = arguments.get("content")
@@ -288,6 +301,8 @@ def _build_system_prompt() -> dict:
             "「予定を追加して」「カレンダーに入れて」と言われたらadd_calendar_eventツールを、"
             "「今日の予定は？」「予定を教えて」と言われたらlist_calendar_eventsツールを、"
             "「予定の時間を変更して」と言われたらupdate_calendar_eventツールを呼び出してください。"
+            "ツールの結果を見てから、続けて別のツールを呼んでもかまいません"
+            "（例: 予定の一覧を確認してから、空いている時間に予定を追加する）。"
             "重要: 過去の会話で似た内容のメモやTODOを保存していたとしても、"
             "新しい依頼があるたびに必ず毎回ツールを実際に呼び出してください。"
             "ツールを呼ばずに「保存しました」「メモしたよ」と答えることは絶対に禁止です。"
@@ -387,56 +402,59 @@ def ask_once(prompt: str) -> str:
 
 # ============ メイン処理 ============
 
+def _run_tool_calls(history: list, tool_calls: list, on_tool_event, context) -> None:
+    """LLM が頼んできたツールを順に実行し、結果を会話履歴に足す"""
+    for call in tool_calls:
+        func = call.get("function", {})
+        func_name = func.get("name", "")
+        raw_args = func.get("arguments", {})
+
+        # LLM によっては引数が JSON の文字列で来る
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                raw_args = {}
+        args = raw_args if isinstance(raw_args, dict) else {}
+
+        tool_result = dispatch_tool_call(func_name, args, context=context)
+        if on_tool_event:
+            on_tool_event(func_name, args, tool_result)
+        history.append({"role": "tool", "tool_name": func_name, "content": tool_result})
+
+
 def process_message(history: list, user_message: str, on_tool_event=None, on_token=None, context: dict = None) -> str:
     """
     ユーザーの発話を受け取り、ツール呼び出しを含めて処理し、最終回答のテキストを返す。
     historyはこの関数の中で直接更新される(in-place)。
 
+    ツールの結果を見て、さらに別のツールを呼ぶこともできる（「明日の予定を見て、空いている時間に
+    ジムを入れて」なら、予定の一覧 → 予定の追加）。ただし MAX_TOOL_ROUNDS 回まで。
+
     on_tool_event(name: str, args: dict, result: str): ツール実行時に呼ばれるコールバック(ログ表示用)
-    on_token(token: str): 最終回答のストリーミング中、トークンごとに呼ばれるコールバック(CLI表示用)
+    on_token(token: str): 最終回答のトークンごとに呼ばれるコールバック(CLI表示用)
     context: dict を渡すと、ツール実行時の副次情報(例: map_url)がin-placeで書き込まれる
     """
     _refresh_system_prompt(history)
     history.append({"role": "user", "content": user_message})
     _trim_history(history)
 
-    # ① まずツールが必要か判断させる
-    first_result = _call_ollama_once(history, use_tools=True)
-    message = first_result.get("message", {})
-    tool_calls = message.get("tool_calls")
+    for _ in range(MAX_TOOL_ROUNDS):
+        message = _call_ollama_once(history, use_tools=True).get("message", {})
+        tool_calls = message.get("tool_calls")
 
-    if tool_calls:
+        if not tool_calls:
+            # ツールが要らなくなったら、それが最後の返事
+            content = message.get("content", "")
+            if on_token:
+                on_token(content)
+            history.append({"role": "assistant", "content": content})
+            return content
+
         history.append(message)
+        _run_tool_calls(history, tool_calls, on_tool_event, context)
 
-        for call in tool_calls:
-            func_name = call["function"]["name"]
-            raw_args = call["function"].get("arguments", {})
-
-            if isinstance(raw_args, str):
-                try:
-                    args = json.loads(raw_args)
-                except json.JSONDecodeError:
-                    args = {}
-            else:
-                args = raw_args
-            if not isinstance(args, dict):
-                args = {}
-
-            tool_result = dispatch_tool_call(func_name, args, context=context)
-
-            if on_tool_event:
-                on_tool_event(func_name, args, tool_result)
-
-            history.append({"role": "tool", "tool_name": func_name, "content": tool_result})
-
-        # ② ツール結果を踏まえた最終回答をストリーミングで生成
-        final_text = _stream_ollama(history, on_token=on_token)
-        history.append({"role": "assistant", "content": final_text})
-        return final_text
-
-    else:
-        content = message.get("content", "")
-        if on_token:
-            on_token(content)
-        history.append({"role": "assistant", "content": content})
-        return content
+    # 上限まで呼んでもツールを頼み続けるときは、ツールなしで今わかっていることから答えさせる
+    final_text = _stream_ollama(history, on_token=on_token)
+    history.append({"role": "assistant", "content": final_text})
+    return final_text

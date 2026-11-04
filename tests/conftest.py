@@ -63,6 +63,7 @@ def test_config(monkeypatch):
         "HOME_LAT": 35.0,
         "HOME_LON": 139.0,
         "HOME_STATION": "新宿",
+        "COMMUTE_STATION": "",
         "OLLAMA_MODEL": "test-model",
         "MAX_HISTORY_MESSAGES": 30,
         "VOICEVOX_URL": "http://voicevox.test",

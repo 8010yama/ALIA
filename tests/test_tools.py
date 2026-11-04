@@ -72,7 +72,7 @@ ROUTE_HTML = """
 </div>
 </body></html>
 """
-NOW = datetime.datetime(2026, 11, 4, 9, 55)
+NOW = datetime.datetime(2026, 11, 4, 9, 55)  # 水曜日
 
 
 @pytest.fixture
@@ -128,11 +128,25 @@ def test_train_route_bad_arrival_time(fake_fetch):
     assert "形式が正しくありません" in train.get_train_route("三鷹", "渋谷", arrive_time="朝", now=NOW)
 
 
-def test_next_train(fake_fetch):
+def test_next_train_without_direction(fake_fetch):
     calls = fake_fetch(ROUTE_HTML)
     text = train.get_next_trains("新宿", now=NOW)
-    assert text == "【次の電車】新宿駅\nあと10分（10:05発）\nJR中央線快速"
-    assert calls[0]["to"] == "渋谷"
+    assert text == "【次の電車】新宿駅（渋谷方面）\nあと10分（10:05発）\nJR中央線快速"
+    assert calls[0]["to"] == "渋谷"  # 方面がわからなければ隣の駅で代用
+
+
+def test_next_train_with_direction(fake_fetch):
+    calls = fake_fetch(ROUTE_HTML)
+    text = train.get_next_trains("三鷹", "渋谷", now=NOW)
+    assert text.startswith("【次の電車】三鷹駅（渋谷方面）\nあと10分（10:05発）")
+    assert text.endswith("渋谷着 10:32")
+    assert (calls[0]["from"], calls[0]["to"]) == ("三鷹", "渋谷")
+
+
+def test_next_train_same_station(fake_fetch):
+    calls = fake_fetch(ROUTE_HTML)
+    assert "行き先を変えてください" in train.get_next_trains("渋谷", "渋谷", now=NOW)
+    assert calls == []
 
 
 def test_next_train_not_found(fake_fetch):
@@ -165,60 +179,105 @@ def test_format_wait(minutes, expected):
 
 # ================= 天気 =================
 
-def _forecast(precipitation):
-    today = datetime.date.today().isoformat()
+def _forecast(day="2026-11-04", rain=None, code=3, prob=40):
+    precipitation = [0.0] * 24
+    for hour, mm in (rain or {}).items():
+        precipitation[hour] = mm
     return {
-        "daily": {"temperature_2m_mean": [18.5]},
-        "hourly": {
-            "time": [f"{today}T{h:02d}:00" for h in range(24)],
-            "precipitation": precipitation,
-        },
+        "daily": {"time": [day], "weather_code": [code], "temperature_2m_max": [22.1],
+                  "temperature_2m_min": [13.0], "precipitation_probability_max": [prob]},
+        "hourly": {"time": [f"{day}T{h:02d}:00" for h in range(24)], "precipitation": precipitation},
     }
 
 
-def test_weather_rain_later(fake_requests, monkeypatch, test_config):
-    monkeypatch.setattr(test_config, "YAHOO_APP_ID", "yahoo-id")
-    rain = [0.0] * 24
-    rain[23] = 1.2  # 23 時から雨（今が何時でも「これから」になる）
-
-    def handler(method, url, kw):
-        if "open-meteo" in url:
-            return FakeResponse(json_data=_forecast(rain))
-        return FakeResponse(json_data={"Feature": [{"Property": {"WeatherList": {"Weather": [
-            {"Type": "observation", "Rainfall": 0.0},
-            {"Type": "forecast", "Rainfall": 3.0},
-        ]}}}]})
-
-    fake_requests(weather, handler)
-    text = weather.get_weather_info(35.0, 139.0)
-    assert "本日の平均気温: 18.5°C" in text
-    assert "雨の予報: 23:00頃から" in text
+def _yahoo(rainfall):
+    return {"Feature": [{"Property": {"WeatherList": {"Weather": [
+        {"Type": "observation", "Rainfall": rainfall}, {"Type": "forecast", "Rainfall": 9.9}]}}}]}
 
 
-def test_weather_raining_now(fake_requests, monkeypatch, test_config):
-    monkeypatch.setattr(test_config, "YAHOO_APP_ID", "yahoo-id")
+@pytest.fixture
+def weather_api(fake_requests, monkeypatch, test_config):
+    """forecast と今の雨（rainfall。None なら Yahoo は使えない）を決めて、偽の API を入れる"""
+    def install(forecast, rainfall=None):
+        if rainfall is not None:
+            monkeypatch.setattr(test_config, "YAHOO_APP_ID", "yahoo-id")
 
-    def handler(method, url, kw):
-        if "open-meteo" in url:
-            return FakeResponse(json_data=_forecast([0.0] * 24))
-        return FakeResponse(json_data={"Feature": [{"Property": {"WeatherList": {"Weather": [
-            {"Type": "observation", "Rainfall": 2.5},
-        ]}}}]})
+        def handler(method, url, kw):
+            if "open-meteo" in url:
+                return forecast if isinstance(forecast, FakeResponse) else FakeResponse(json_data=forecast)
+            return FakeResponse(json_data=_yahoo(rainfall))
 
-    fake_requests(weather, handler)
-    assert "現在雨が降っているが、この後は止む予報（2.5mm/h）" in weather.get_weather_info(35.0, 139.0)
+        return fake_requests(weather, handler)
 
-
-def test_weather_without_yahoo_key_still_answers(fake_requests):
-    fake_requests(weather, lambda m, url, kw: FakeResponse(json_data=_forecast([0.0] * 24)))
-    text = weather.get_weather_info(35.0, 139.0)
-    assert "本日の平均気温: 18.5°C" in text
-    assert "今日は雨の予報なし" in text
+    return install
 
 
-def test_weather_all_down(fake_requests):
-    fake_requests(weather, lambda m, url, kw: FakeResponse(status_code=500))
-    assert "気温予報の取得に失敗しました" in weather.get_weather_info(35.0, 139.0)
+def test_weather_today(weather_api):
+    calls = weather_api(_forecast(rain={8: 2.0, 15: 1.2}), rainfall=0.0)
+    text = weather.get_weather_info(35.0, 139.0, now=NOW)
+    assert text.splitlines() == [
+        "今日（11月4日・水）の天気: くもり",
+        "気温: 最高22.1°C / 最低13.0°C",
+        "降水確率: 40%",
+        "雨の予報: 15:00頃から",  # 8 時の雨はもう過ぎている
+    ]
+    assert calls.calls[0][2]["params"]["start_date"] == "2026-11-04"
+
+
+def test_weather_tomorrow(weather_api):
+    calls = weather_api(_forecast(day="2026-11-05", rain={8: 2.0}, code=61, prob=80), rainfall=5.0)
+    text = weather.get_weather_info(35.0, 139.0, datetime.date(2026, 11, 5), now=NOW)
+    assert text.splitlines() == [
+        "明日（11月5日・木）の天気: 小雨",
+        "気温: 最高22.1°C / 最低13.0°C",
+        "降水確率: 80%",
+        "雨の予報: 08:00頃から",  # 明日は朝からの雨も伝える
+    ]
+    assert calls.calls[0][2]["params"]["end_date"] == "2026-11-05"
+    assert len(calls.calls) == 1  # 明日の天気では「今の雨」は調べない
+
+
+def test_weather_later_day_label(weather_api):
+    weather_api(_forecast(day="2026-11-08", code=0))
+    assert weather.get_weather_info(35.0, 139.0, datetime.date(2026, 11, 8), now=NOW).startswith("11月8日（日）の天気: 快晴")
+
+
+@pytest.mark.parametrize("date,expected", [
+    (datetime.date(2026, 11, 3), "過去の天気"),
+    (datetime.date(2026, 11, 11), "6日先まで"),
+])
+def test_weather_out_of_range(weather_api, date, expected):
+    calls = weather_api(_forecast())
+    assert expected in weather.get_weather_info(35.0, 139.0, date, now=NOW)
+    assert calls.calls == []
+
+
+def test_weather_raining_now_then_stops(weather_api):
+    weather_api(_forecast(), rainfall=2.5)
+    assert weather.get_weather_info(35.0, 139.0, now=NOW).endswith("今雨が降っているが（2.5mm/h）、この後は止む予報")
+
+
+def test_weather_raining_now_and_later(weather_api):
+    weather_api(_forecast(rain={12: 3.0}), rainfall=2.5)
+    assert weather.get_weather_info(35.0, 139.0, now=NOW).endswith("今雨が降っていて（2.5mm/h）、この後も降る予報")
+
+
+def test_weather_without_yahoo_key_still_answers(weather_api):
+    weather_api(_forecast())
+    text = weather.get_weather_info(35.0, 139.0, now=NOW)
+    assert "最高22.1°C" in text
+    assert text.endswith("この後は雨の予報なし")
+
+
+def test_weather_forecast_down(weather_api):
+    weather_api(FakeResponse(status_code=500))
+    assert "予報の取得に失敗しました" in weather.get_weather_info(35.0, 139.0, now=NOW)
+
+
+def test_weather_code_names():
+    assert weather.describe_weather_code(95) == "雷雨"
+    assert weather.describe_weather_code(42) == "不明"
+    assert weather.describe_weather_code(None) == "不明"
 
 
 # ================= Notion =================

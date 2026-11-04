@@ -32,6 +32,8 @@ MAX_HISTORY_MESSAGES = int(_get("MAX_HISTORY_MESSAGES", "30"))
 HOME_LAT = float(_get("HOME_LAT", "35.6895"))
 HOME_LON = float(_get("HOME_LON", "139.6917"))
 HOME_STATION = _get("HOME_STATION", "新宿")
+# 「次の電車は？」と方面を言わなかったときの行き先（通勤・通学先の駅）。空なら隣の駅で代用する
+COMMUTE_STATION = _get("COMMUTE_STATION")
 
 # ---- サーバー（iPhone から使う） ----
 API_KEY = _get("API_KEY")
