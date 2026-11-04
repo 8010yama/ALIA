@@ -65,6 +65,8 @@ def test_config(monkeypatch):
         "HOME_STATION": "新宿",
         "COMMUTE_STATION": "",
         "OLLAMA_MODEL": "test-model",
+        "OLLAMA_KEEP_ALIVE": "30m",
+        "OLLAMA_TIMEOUT": 120.0,
         "MAX_HISTORY_MESSAGES": 30,
         "VOICEVOX_URL": "http://voicevox.test",
         "VOICEVOX_SPEAKER_ID": 14,

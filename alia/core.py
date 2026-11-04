@@ -354,11 +354,12 @@ def _call_ollama_once(messages: list, use_tools: bool) -> dict:
         "messages": messages,
         "stream": False,
         "think": False,
+        "keep_alive": config.OLLAMA_KEEP_ALIVE,
     }
     if use_tools:
         payload["tools"] = TOOLS
 
-    res = httpx.post(config.OLLAMA_URL, json=payload, timeout=60)
+    res = httpx.post(config.OLLAMA_URL, json=payload, timeout=config.OLLAMA_TIMEOUT)
     res.raise_for_status()
     return res.json()
 
@@ -374,10 +375,11 @@ def _stream_ollama(messages: list, on_token=None) -> str:
         "messages": messages,
         "stream": True,
         "think": False,
+        "keep_alive": config.OLLAMA_KEEP_ALIVE,
     }
 
     full_response = ""
-    with httpx.stream("POST", config.OLLAMA_URL, json=payload, timeout=120) as response:
+    with httpx.stream("POST", config.OLLAMA_URL, json=payload, timeout=config.OLLAMA_TIMEOUT) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line:
@@ -392,6 +394,21 @@ def _stream_ollama(messages: list, on_token=None) -> str:
                 break
 
     return full_response
+
+
+def warm_up() -> bool:
+    """
+    モデルを先にメモリに読み込んでおく（Ollama は messages が空だと、読み込むだけで返す）。
+    サーバーを起動したときに呼ぶと、iPhone からの最初の1回が速くなる。
+    """
+    payload = {"model": config.OLLAMA_MODEL, "messages": [], "keep_alive": config.OLLAMA_KEEP_ALIVE}
+    try:
+        res = httpx.post(config.OLLAMA_URL, json=payload, timeout=max(config.OLLAMA_TIMEOUT, 300))
+        res.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"[LLM] モデル（{config.OLLAMA_MODEL}）を読み込めませんでした: {type(e).__name__}: {e}")
+        return False
 
 
 def ask_once(prompt: str) -> str:

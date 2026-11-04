@@ -283,3 +283,44 @@ def test_short_history_is_untouched():
     before = list(history)
     core._trim_history(history, max_messages=30)
     assert history == before
+
+
+def test_warm_up_loads_the_model(monkeypatch, test_config):
+    sent = []
+    monkeypatch.setattr(test_config, "OLLAMA_KEEP_ALIVE", "45m")
+
+    class Res:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(core.httpx, "post", lambda url, json, timeout: sent.append((json, timeout)) or Res())
+    assert core.warm_up() is True
+    payload, timeout = sent[0]
+    assert payload == {"model": "test-model", "messages": [], "keep_alive": "45m"}
+    assert timeout >= 300  # 読み込みは時間がかかるので長く待つ
+
+
+def test_warm_up_failure_is_reported_not_raised(monkeypatch):
+    def down(*args, **kwargs):
+        raise core.httpx.ConnectError("refused")
+
+    monkeypatch.setattr(core.httpx, "post", down)
+    assert core.warm_up() is False
+
+
+def test_requests_keep_the_model_loaded(monkeypatch, test_config):
+    sent = []
+    monkeypatch.setattr(test_config, "OLLAMA_KEEP_ALIVE", "-1")
+    monkeypatch.setattr(test_config, "OLLAMA_TIMEOUT", 99.0)
+
+    class Res:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "はい"}}
+
+    monkeypatch.setattr(core.httpx, "post", lambda url, json, timeout: sent.append((json, timeout)) or Res())
+    core._call_ollama_once([{"role": "user", "content": "x"}], use_tools=True)
+    assert sent[0][0]["keep_alive"] == "-1"
+    assert sent[0][1] == 99.0

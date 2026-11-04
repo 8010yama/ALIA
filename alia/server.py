@@ -21,6 +21,7 @@ VOICEVOX で音声にした wav を返す。ngrok で外から届く URL を作�
 import argparse
 import json
 import threading
+import time
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -30,7 +31,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
 
 from alia import config
-from alia.core import ask_once, new_conversation, process_message
+from alia.core import ask_once, new_conversation, process_message, warm_up
 from alia.speech import synthesize
 from alia.tools.maps import build_google_maps_nav_url, extract_nav_destination, geocode_place, get_map_url
 from alia.tools.weather import get_weather_info
@@ -246,6 +247,14 @@ def main():
         listener = ngrok.forward(args.port, **options)
         print(startup_message(listener.url(), config.NGROK_DOMAIN))
 
+    # モデルの読み込みは時間がかかるので、裏で始めておく（その間もサーバーは受け付ける）
+    def _warm_up():
+        start = time.monotonic()
+        print(f"[LLM] モデル（{config.OLLAMA_MODEL}）を読み込んでいます...")
+        if warm_up():
+            print(f"[LLM] 読み込み完了（{time.monotonic() - start:.0f}秒）。話しかけて大丈夫です。")
+
+    threading.Thread(target=_warm_up, daemon=True).start()
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 

@@ -24,6 +24,11 @@ def _get(name: str, default: str = "") -> str:
 # ---- LLM（Ollama） ----
 OLLAMA_URL = _get("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = _get("OLLAMA_MODEL", "gemma4:12b")
+# 使い終わってからモデルをメモリに置いておく時間（Ollama の標準は 5m）。
+# 降ろされると次の1回目が読み込みから始まって遅くなる。"-1" でずっと置いておく
+OLLAMA_KEEP_ALIVE = _get("OLLAMA_KEEP_ALIVE", "30m")
+# LLM の返事を待つ秒数（モデルの読み込みに時間がかかることもあるので長めに）
+OLLAMA_TIMEOUT = float(_get("OLLAMA_TIMEOUT", "120"))
 # 会話履歴として LLM に渡すメッセージの最大数（システムプロンプトを除く）。
 # サーバーを動かし続けても履歴が膨らみ続けないようにする。
 MAX_HISTORY_MESSAGES = int(_get("MAX_HISTORY_MESSAGES", "30"))
